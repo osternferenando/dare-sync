@@ -15,6 +15,7 @@
     --border: #e2e8f0;
     --shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.1), 0 2px 4px -1px rgba(0, 0, 0, 0.06);
     --error: #ef4444;
+    --success: #10b981;
   }
   * { box-sizing: border-box; margin: 0; padding: 0; }
   body {
@@ -27,11 +28,20 @@
     align-items: center;
     padding: 20px;
   }
-  header { text-align: center; margin-bottom: 30px; }
+  header { text-align: center; margin-bottom: 20px; }
   h1 { font-size: 2rem; font-weight: 800; letter-spacing: -0.5px; }
-  .status { font-size: 0.9rem; color: #64748b; margin-top: 5px; min-height: 20px;}
-  .status.connected { color: #10b981; font-weight: 600; }
-  .status.error { color: var(--error); font-weight: 600; }
+  .status {
+    font-size: 0.9rem;
+    color: #64748b;
+    margin-top: 8px;
+    min-height: 20px;
+    padding: 6px 12px;
+    border-radius: 6px;
+    transition: all 0.3s;
+  }
+  .status.connected { color: var(--success); background: #d1fae5; font-weight: 600; }
+  .status.error { color: var(--error); background: #fee2e2; font-weight: 600; }
+  .status.loading { color: var(--accent); background: #e0e7ff; }
 
   .panel {
     background: var(--card);
@@ -44,6 +54,7 @@
     border: 1px solid var(--border);
     text-align: center;
   }
+
   .input-group { display: flex; gap: 10px; margin-top: 15px; }
   input {
     flex: 1;
@@ -58,7 +69,7 @@
     font-weight: 600;
   }
   input:focus { border-color: var(--accent); }
-  
+
   button {
     padding: 12px 20px;
     border: none;
@@ -69,7 +80,7 @@
     font-size: 0.95rem;
   }
   .btn-primary { background: var(--accent); color: white; width: 100%; }
-  .btn-primary:hover { background: var(--accent-hover); transform: translateY(-1px); }
+  .btn-primary:hover:not(:disabled) { background: var(--accent-hover); transform: translateY(-1px); }
   .btn-primary:disabled { background: #94a3b8; cursor: not-allowed; transform: none; }
   .btn-secondary { background: transparent; border: 1px solid var(--border); color: var(--text); }
   .btn-secondary:hover { background: #f1f5f9; }
@@ -92,7 +103,7 @@
   canvas { width: 100%; height: 100%; border-radius: 50%; box-shadow: var(--shadow); }
   .pointer {
     position: absolute; top: -15px; left: 50%; transform: translateX(-50%);
-    width: 0; height: 0; 
+    width: 0; height: 0;
     border-left: 15px solid transparent; border-right: 15px solid transparent;
     border-top: 25px solid var(--accent); z-index: 10;
     filter: drop-shadow(0 2px 4px rgba(0,0,0,0.2));
@@ -127,16 +138,34 @@
     display: none;
   }
   .turn-indicator.visible { display: inline-block; }
-  
+
   .room-display {
-    font-size: 1.5rem;
+    font-size: 1.8rem;
     font-weight: 800;
-    letter-spacing: 3px;
+    letter-spacing: 4px;
     color: var(--accent);
-    margin: 10px 0;
-    padding: 10px;
+    margin: 15px 0;
+    padding: 15px;
     background: #f1f5f9;
     border-radius: 8px;
+    font-family: 'Courier New', monospace;
+  }
+
+  .error-box {
+    background: #fee2e2;
+    color: var(--error);
+    padding: 12px;
+    border-radius: 8px;
+    margin-top: 15px;
+    font-size: 0.9rem;
+    display: none;
+  }
+  .error-box.show { display: block; }
+  .error-box button {
+    margin-top: 10px;
+    background: var(--error);
+    color: white;
+    width: 100%;
   }
 </style>
 </head>
@@ -158,21 +187,31 @@
     <strong>Share this Room Code:</strong>
     <div class="room-display" id="myCodeDisplay">---</div>
     <button class="btn-copy" onclick="copyCode()">📋 Copy Code</button>
-    <p style="font-size:0.85rem; color:#64748b; margin-top:15px;">Waiting for friend to join...</p>
+    <p style="font-size:0.85rem; color:#64748b; margin-top:15px;" id="waitingMsg">Waiting for friend to join...</p>
+    <button class="btn-secondary" style="margin-top:10px; width:100%;" onclick="cancelRoom()">Cancel</button>
   </div>
-  
-  <div class="divider">— OR JOIN A GAME —</div>
-  
-  <div class="input-group">
-    <input type="text" id="roomCodeInput" placeholder="CODE" maxlength="6" />
-    <button class="btn-secondary" onclick="joinRoom()">Join</button>
+
+  <div id="step3" style="display:none;">
+    <strong>Join a game</strong>
+    <div class="input-group">
+      <input type="text" id="roomCodeInput" placeholder="CODE" maxlength="8" />
+      <button class="btn-secondary" onclick="joinRoom()" id="joinBtn">Join</button>
+    </div>
+    <div class="error-box" id="joinError">
+      <div id="joinErrorMsg">Connection failed</div>
+      <button onclick="resetJoin()">Try Again</button>
+    </div>
   </div>
+
+  <div class="divider">— OR —</div>
+
+  <button class="btn-secondary" style="width:100%;" onclick="showJoinStep()">Join Existing Game</button>
 </div>
 
 <!-- Game Area -->
 <div class="game-area" id="gameArea">
   <div class="turn-indicator" id="turnIndicator">Your Turn</div>
-  
+
   <div class="wheel-container">
     <div class="pointer"></div>
     <canvas id="wheel" width="400" height="400"></canvas>
@@ -209,6 +248,7 @@ let isHost = false;
 let isMyTurn = true;
 let currentAngle = 0;
 let spinning = false;
+let connectionTimeout = null;
 
 const canvas = document.getElementById('wheel');
 const ctx = canvas.getContext('2d');
@@ -219,13 +259,13 @@ function drawWheel() {
   const center = size / 2;
   const radius = center - 10;
   ctx.clearRect(0, 0, size, size);
-  
+
   const slice = (Math.PI * 2) / DARES.length;
-  
+
   DARES.forEach((dare, i) => {
     const start = currentAngle + i * slice;
     const end = start + slice;
-    
+
     ctx.beginPath();
     ctx.moveTo(center, center);
     ctx.arc(center, center, radius, start, end);
@@ -234,7 +274,7 @@ function drawWheel() {
     ctx.strokeStyle = '#fff';
     ctx.lineWidth = 2;
     ctx.stroke();
-    
+
     ctx.save();
     ctx.translate(center, center);
     ctx.rotate(start + slice / 2);
@@ -244,7 +284,7 @@ function drawWheel() {
     ctx.fillText(dare.length > 18 ? dare.substring(0,15)+"..." : dare, radius - 15, 5);
     ctx.restore();
   });
-  
+
   ctx.beginPath();
   ctx.arc(center, center, 30, 0, Math.PI*2);
   ctx.fillStyle = "#fff";
@@ -253,121 +293,307 @@ function drawWheel() {
 
 drawWheel();
 
-// --- MULTIPLAYER LOGIC ---
+// ============================================
+// HELPERS
+// ============================================
 
 function generateRoomCode() {
-  return Math.random().toString(36).substring(2, 8).toUpperCase();
+  // 8-character code, more unique
+  const chars = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789'; // removed confusing chars like 0/O, 1/I
+  let code = '';
+  for (let i = 0; i < 8; i++) {
+    code += chars.charAt(Math.floor(Math.random() * chars.length));
+  }
+  return code;
 }
 
+function updateStatus(msg, type) {
+  const el = document.getElementById('status');
+  el.innerText = msg;
+  el.className = 'status ' + (type || '');
+}
+
+function clearConnectionTimeout() {
+  if (connectionTimeout) {
+    clearTimeout(connectionTimeout);
+    connectionTimeout = null;
+  }
+}
+
+function cleanupPeer() {
+  clearConnectionTimeout();
+  if (conn) { try { conn.close(); } catch(e) {} conn = null; }
+  if (peer) { try { peer.destroy(); } catch(e) {} peer = null; }
+}
+
+// ============================================
+// CREATE ROOM (HOST)
+// ============================================
+
 function createRoom() {
+  cleanupPeer();
+
   const btn = document.getElementById('createBtn');
   btn.disabled = true;
-  btn.innerText = "Setting up...";
-  
-  myId = "dare-" + generateRoomCode();
-  
-  peer = new Peer(myId, { debug: 1 });
+  btn.innerText = "Connecting to server...";
+  updateStatus("Connecting to signaling server...", "loading");
+
+  const roomCode = generateRoomCode();
+  myId = "daregame-" + roomCode + "-" + Date.now().toString(36);
+
+  // Explicit PeerJS config for reliability
+  peer = new Peer(myId, {
+    debug: 1,
+    config: {
+      iceServers: [
+        { urls: 'stun:stun.l.google.com:19302' },
+        { urls: 'stun:stun1.l.google.com:19302' },
+        { urls: 'stun:stun.cloudflare.com:3478' }
+      ]
+    }
+  });
+
+  // Timeout: if peer doesn't open in 15 seconds, fail
+  connectionTimeout = setTimeout(() => {
+    if (!peer || peer.destroyed) return;
+    updateStatus("Server connection timed out. Try again.", "error");
+    btn.disabled = false;
+    btn.innerText = "Create Room";
+    cleanupPeer();
+  }, 15000);
 
   peer.on('open', (id) => {
+    clearConnectionTimeout();
     isHost = true;
     isMyTurn = true;
+
     document.getElementById('step1').style.display = 'none';
     document.getElementById('step2').style.display = 'block';
-    document.getElementById('myCodeDisplay').innerText = id.replace('dare-', '');
-    updateStatus("Room created! Share the code.", "");
+    document.getElementById('myCodeDisplay').innerText = roomCode;
+    updateStatus("Room ready! Share the code.", "connected");
+
+    // Store roomCode for later
+    peer._roomCode = roomCode;
   });
 
   peer.on('connection', (c) => {
     conn = c;
-    setupConnection();
+    setupHostConnection();
   });
 
   peer.on('error', (err) => {
-    console.error(err);
+    console.error('Peer error:', err);
+    clearConnectionTimeout();
     btn.disabled = false;
     btn.innerText = "Create Room";
-    if (err.type === 'unavailable-id') {
-      updateStatus("Code taken. Try again.", "error");
-    } else {
-      updateStatus("Connection error. Check internet.", "error");
+
+    let msg = "Connection error.";
+    if (err.type === 'unavailable-id') msg = "Code taken. Try again.";
+    else if (err.type === 'network') msg = "No internet connection.";
+    else if (err.type === 'server-error') msg = "PeerJS server busy. Try again in a moment.";
+    else if (err.type === 'socket-error') msg = "Socket error. Refresh and try again.";
+    else if (err.type === 'socket-closed') msg = "Connection closed. Try again.";
+
+    updateStatus(msg, "error");
+    cleanupPeer();
+  });
+}
+
+function setupHostConnection() {
+  updateStatus("Player connecting...", "loading");
+  document.getElementById('waitingMsg').innerText = "Player connecting...";
+
+  // Timeout for connection opening
+  connectionTimeout = setTimeout(() => {
+    if (!conn || !conn.open) {
+      updateStatus("Connection timed out. Player may have left.", "error");
+      document.getElementById('waitingMsg').innerText = "Connection failed. Try again.";
     }
-  });
-}
+  }, 15000);
 
-function joinRoom() {
-  const code = document.getElementById('roomCodeInput').value.trim().toUpperCase();
-  if (code.length < 4) return alert("Please enter a valid room code.");
-  
-  const hostId = "dare-" + code;
-  updateStatus("Connecting...", "");
-  
-  peer = new Peer(null, { debug: 1 });
-  
-  peer.on('open', () => {
-    conn = peer.connect(hostId);
-    isHost = false;
-    isMyTurn = false;
-    setupConnection();
-  });
-  
-  peer.on('error', (err) => {
-    console.error(err);
-    updateStatus("Could not find room. Check code.", "error");
-  });
-}
-
-function setupConnection() {
   conn.on('open', () => {
-    updateStatus("Connected to player!", "connected");
-    document.getElementById('connectPanel').style.display = 'none';
-    document.getElementById('gameArea').classList.add('active');
-    updateTurnIndicator();
-    syncState();
+    clearConnectionTimeout();
+    updateStatus("Connected! Game starting...", "connected");
+    startGame();
+    // Tell guest it's their turn first? No, host goes first.
+    conn.send({ type: 'START', isMyTurn: false });
   });
 
   conn.on('data', (data) => handleData(data));
-  
+
   conn.on('close', () => {
     updateStatus("Player disconnected", "error");
     document.getElementById('gameArea').classList.remove('active');
     document.getElementById('connectPanel').style.display = 'block';
-    document.getElementById('step1').style.display = 'block';
-    document.getElementById('step2').style.display = 'none';
-    document.getElementById('createBtn').disabled = false;
-    document.getElementById('createBtn').innerText = "Create Room";
+    resetToStart();
+  });
+
+  conn.on('error', (err) => {
+    console.error('Connection error:', err);
+    updateStatus("Connection error: " + err.message, "error");
   });
 }
 
+// ============================================
+// JOIN ROOM (GUEST)
+// ============================================
+
+function showJoinStep() {
+  document.getElementById('step1').style.display = 'none';
+  document.getElementById('step3').style.display = 'block';
+  document.getElementById('roomCodeInput').focus();
+}
+
+function joinRoom() {
+  const code = document.getElementById('roomCodeInput').value.trim().toUpperCase();
+  if (code.length < 6) {
+    showJoinError("Please enter the full room code.");
+    return;
+  }
+
+  cleanupPeer();
+
+  const btn = document.getElementById('joinBtn');
+  btn.disabled = true;
+  btn.innerText = "...";
+  updateStatus("Connecting to server...", "loading");
+
+  // Find the host: we need to guess their full ID
+  // Host ID format: daregame-{CODE}-{timestamp}
+  // We'll use a list call to find matching peers
+  // Actually, simpler: use a fixed prefix that both sides know
+
+  // NEW APPROACH: Use a predictable host ID format
+  const hostId = "daregame-" + code;
+
+  peer = new Peer({
+    debug: 1,
+    config: {
+      iceServers: [
+        { urls: 'stun:stun.l.google.com:19302' },
+        { urls: 'stun:stun1.l.google.com:19302' },
+        { urls: 'stun:stun.cloudflare.com:3478' }
+      ]
+    }
+  });
+
+  connectionTimeout = setTimeout(() => {
+    if (!peer || peer.destroyed) return;
+    showJoinError("Server connection timed out. Check your internet.");
+    btn.disabled = false;
+    btn.innerText = "Join";
+    updateStatus("Connection timed out", "error");
+    cleanupPeer();
+  }, 15000);
+
+  peer.on('open', () => {
+    clearConnectionTimeout();
+    updateStatus("Finding room...", "loading");
+
+    // Connect to host
+    conn = peer.connect(hostId, { reliable: true });
+
+    // Timeout for connection
+    connectionTimeout = setTimeout(() => {
+      if (!conn || !conn.open) {
+        showJoinError("Room not found or host left. Check the code.");
+        btn.disabled = false;
+        btn.innerText = "Join";
+        updateStatus("Could not find room", "error");
+        cleanupPeer();
+      }
+    }, 15000);
+
+    conn.on('open', () => {
+      clearConnectionTimeout();
+      isHost = false;
+      updateStatus("Connected!", "connected");
+      startGame();
+    });
+
+    conn.on('data', (data) => handleData(data));
+
+    conn.on('close', () => {
+      updateStatus("Host disconnected", "error");
+      document.getElementById('gameArea').classList.remove('active');
+      document.getElementById('connectPanel').style.display = 'block';
+      resetToStart();
+    });
+
+    conn.on('error', (err) => {
+      console.error('Conn error:', err);
+      showJoinError("Connection error: " + err.message);
+      btn.disabled = false;
+      btn.innerText = "Join";
+    });
+  });
+
+  peer.on('error', (err) => {
+    console.error('Peer error:', err);
+    clearConnectionTimeout();
+    btn.disabled = false;
+    btn.innerText = "Join";
+
+    let msg = "Connection error.";
+    if (err.type === 'peer-unavailable') msg = "Room not found. Check the code.";
+    else if (err.type === 'network') msg = "No internet connection.";
+    else if (err.type === 'server-error') msg = "PeerJS server busy. Try again.";
+    else if (err.type === 'socket-error') msg = "Socket error. Refresh page.";
+    else msg = err.type + ": " + (err.message || "Unknown error");
+
+    showJoinError(msg);
+    updateStatus(msg, "error");
+    cleanupPeer();
+  });
+}
+
+function showJoinError(msg) {
+  document.getElementById('joinErrorMsg').innerText = msg;
+  document.getElementById('joinError').classList.add('show');
+}
+
+function resetJoin() {
+  document.getElementById('joinError').classList.remove('show');
+  document.getElementById('joinBtn').disabled = false;
+  document.getElementById('joinBtn').innerText = "Join";
+  updateStatus("Ready to join", "");
+  cleanupPeer();
+}
+
+// ============================================
+// GAME LOGIC
+// ============================================
+
+function startGame() {
+  document.getElementById('connectPanel').style.display = 'none';
+  document.getElementById('gameArea').classList.add('active');
+  updateTurnIndicator();
+}
+
 function handleData(data) {
-  if (data.type === 'SPIN_START') {
-    startRemoteSpin(data.angle);
-  } else if (data.type === 'SPIN_END') {
-    finishRemoteSpin(data.dare);
-  } else if (data.type === 'SYNC') {
+  if (data.type === 'START') {
+    isMyTurn = data.isMyTurn;
+    updateTurnIndicator();
+  } else if (data.type === 'SPIN') {
+    // Remote player spun - animate same wheel and show result
+    remoteSpin(data.angle, data.dare);
+  } else if (data.type === 'TURN') {
     isMyTurn = data.isMyTurn;
     updateTurnIndicator();
   }
 }
 
-function syncState() {
-  if (conn && conn.open) {
-    conn.send({ type: 'SYNC', isMyTurn: isMyTurn });
-  }
-}
-
-// --- GAME LOGIC ---
-
 function updateTurnIndicator() {
   const ind = document.getElementById('turnIndicator');
   const btn = document.getElementById('spinBtn');
-  
+
   if (isMyTurn) {
     ind.innerText = "👉 YOUR TURN";
     ind.classList.add('visible');
     btn.disabled = false;
     btn.style.opacity = 1;
   } else {
-    ind.innerText = "⏳ WAITING FOR OPPONENT...";
+    ind.innerText = "⏳ OPPONENT'S TURN";
     ind.classList.add('visible');
     btn.disabled = true;
     btn.style.opacity = 0.5;
@@ -376,90 +602,104 @@ function updateTurnIndicator() {
 
 function handleSpin() {
   if (spinning || !isMyTurn) return;
-  
+
   spinning = true;
   document.getElementById('spinBtn').disabled = true;
   document.getElementById('resultCard').classList.remove('show');
-  
+
   const spinAmount = Math.PI * 2 * (5 + Math.random() * 5);
   const duration = 4000;
   const startTime = performance.now();
   const startAngle = currentAngle;
-  
+
+  // Calculate result now (deterministic based on spinAmount)
+  const finalAngle = startAngle + spinAmount;
+  const slice = (Math.PI * 2) / DARES.length;
+  const normalized = ((Math.PI * 2 - (finalAngle % (Math.PI * 2))) + Math.PI * 1.5) % (Math.PI * 2);
+  const index = Math.floor(normalized / slice) % DARES.length;
+  const result = DARES[index];
+
+  // Send to opponent IMMEDIATELY so they animate too
   if (conn && conn.open) {
-    conn.send({ type: 'SPIN_START', angle: spinAmount });
+    conn.send({ type: 'SPIN', angle: spinAmount, dare: result });
   }
-  
+
   function animate(now) {
     const elapsed = now - startTime;
     const t = Math.min(elapsed / duration, 1);
     const ease = 1 - Math.pow(1 - t, 3);
-    
+
     currentAngle = startAngle + spinAmount * ease;
     drawWheel();
-    
+
     if (t < 1) {
       requestAnimationFrame(animate);
     } else {
-      finishSpin();
+      // Show result
+      document.getElementById('dareText').innerText = result;
+      document.getElementById('resultCard').classList.add('show');
+
+      // Switch turns
+      isMyTurn = false;
+      if (conn && conn.open) {
+        conn.send({ type: 'TURN', isMyTurn: true });
+      }
+      updateTurnIndicator();
+      spinning = false;
     }
   }
   requestAnimationFrame(animate);
 }
 
-function startRemoteSpin(spinAmount) {
+function remoteSpin(spinAmount, dare) {
   spinning = true;
   document.getElementById('resultCard').classList.remove('show');
+  document.getElementById('spinBtn').disabled = true;
+
   const duration = 4000;
   const startTime = performance.now();
   const startAngle = currentAngle;
-  
+
   function animate(now) {
     const elapsed = now - startTime;
     const t = Math.min(elapsed / duration, 1);
     const ease = 1 - Math.pow(1 - t, 3);
-    
+
     currentAngle = startAngle + spinAmount * ease;
     drawWheel();
-    
-    if (t < 1) requestAnimationFrame(animate);
+
+    if (t < 1) {
+      requestAnimationFrame(animate);
+    } else {
+      document.getElementById('dareText').innerText = dare;
+      document.getElementById('resultCard').classList.add('show');
+
+      // It's now my turn
+      isMyTurn = true;
+      updateTurnIndicator();
+      spinning = false;
+    }
   }
   requestAnimationFrame(animate);
 }
 
-function finishSpin() {
-  spinning = false;
-  
-  const slice = (Math.PI * 2) / DARES.length;
-  const normalized = ((Math.PI * 2 - (currentAngle % (Math.PI * 2))) + Math.PI * 1.5) % (Math.PI * 2);
-  const index = Math.floor(normalized / slice) % DARES.length;
-  const result = DARES[index];
-  
-  document.getElementById('dareText').innerText = result;
-  document.getElementById('resultCard').classList.add('show');
-  
-  if (conn && conn.open) {
-    conn.send({ type: 'SPIN_END', dare: result });
-  }
-  
-  isMyTurn = !isMyTurn;
-  syncState();
-  updateTurnIndicator();
+// ============================================
+// UI HELPERS
+// ============================================
+
+function cancelRoom() {
+  cleanupPeer();
+  resetToStart();
+  updateStatus("Ready to play", "");
 }
 
-function finishRemoteSpin(dare) {
-  spinning = false;
-  document.getElementById('dareText').innerText = dare;
-  document.getElementById('resultCard').classList.add('show');
-  
-  isMyTurn = !isMyTurn;
-  updateTurnIndicator();
-}
-
-function updateStatus(msg, type) {
-  const el = document.getElementById('status');
-  el.innerText = msg;
-  el.className = 'status ' + type;
+function resetToStart() {
+  document.getElementById('step1').style.display = 'block';
+  document.getElementById('step2').style.display = 'none';
+  document.getElementById('step3').style.display = 'none';
+  document.getElementById('createBtn').disabled = false;
+  document.getElementById('createBtn').innerText = "Create Room";
+  document.getElementById('waitingMsg').innerText = "Waiting for friend to join...";
 }
 
 function copyCode() {
@@ -469,6 +709,15 @@ function copyCode() {
     const original = btn.innerText;
     btn.innerText = "✅ Copied!";
     setTimeout(() => btn.innerText = original, 2000);
+  }).catch(() => {
+    // Fallback
+    const ta = document.createElement('textarea');
+    ta.value = code;
+    document.body.appendChild(ta);
+    ta.select();
+    document.execCommand('copy');
+    document.body.removeChild(ta);
+    alert("Code copied: " + code);
   });
 }
 </script>

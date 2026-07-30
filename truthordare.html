@@ -1,0 +1,468 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>Dare Sync</title>
+<!-- PeerJS for multiplayer -->
+<script src="https://unpkg.com/peerjs@1.4.7/dist/peerjs.min.js"></script>
+<style>
+  :root {
+    --bg: #f8fafc;
+    --card: #ffffff;
+    --text: #1e293b;
+    --accent: #6366f1; /* Indigo */
+    --accent-hover: #4f46e5;
+    --border: #e2e8f0;
+    --shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.1), 0 2px 4px -1px rgba(0, 0, 0, 0.06);
+  }
+
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  
+  body {
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+    background: var(--bg);
+    color: var(--text);
+    min-height: 100vh;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    padding: 20px;
+  }
+
+  /* Header */
+  header { text-align: center; margin-bottom: 30px; }
+  h1 { font-size: 2rem; font-weight: 800; letter-spacing: -0.5px; color: var(--text); }
+  .status { font-size: 0.9rem; color: #64748b; margin-top: 5px; }
+  .status.connected { color: var(--accent); font-weight: 600; }
+
+  /* Connection Panel */
+  .panel {
+    background: var(--card);
+    padding: 20px;
+    border-radius: 16px;
+    box-shadow: var(--shadow);
+    width: 100%;
+    max-width: 400px;
+    margin-bottom: 20px;
+    border: 1px solid var(--border);
+  }
+  
+  .input-group { display: flex; gap: 10px; margin-top: 10px; }
+  input {
+    flex: 1;
+    padding: 10px;
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    font-size: 1rem;
+    outline: none;
+  }
+  input:focus { border-color: var(--accent); }
+  
+  button {
+    padding: 10px 20px;
+    border: none;
+    border-radius: 8px;
+    font-weight: 600;
+    cursor: pointer;
+    transition: all 0.2s;
+    font-size: 0.9rem;
+  }
+  
+  .btn-primary { background: var(--accent); color: white; }
+  .btn-primary:hover { background: var(--accent-hover); transform: translateY(-1px); }
+  .btn-secondary { background: transparent; border: 1px solid var(--border); color: var(--text); }
+  .btn-secondary:hover { background: #f1f5f9; }
+
+  /* Game Area */
+  .game-area {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    opacity: 0.5;
+    pointer-events: none;
+    transition: opacity 0.3s;
+  }
+  .game-area.active { opacity: 1; pointer-events: auto; }
+
+  .wheel-container {
+    position: relative;
+    width: 300px;
+    height: 300px;
+    margin: 20px 0;
+  }
+  
+  canvas { width: 100%; height: 100%; border-radius: 50%; box-shadow: var(--shadow); }
+  
+  .pointer {
+    position: absolute;
+    top: -15px;
+    left: 50%;
+    transform: translateX(-50%);
+    width: 0; 
+    height: 0; 
+    border-left: 15px solid transparent;
+    border-right: 15px solid transparent;
+    border-top: 25px solid var(--accent);
+    z-index: 10;
+    filter: drop-shadow(0 2px 4px rgba(0,0,0,0.2));
+  }
+
+  .result-card {
+    background: var(--card);
+    padding: 25px;
+    border-radius: 16px;
+    box-shadow: var(--shadow);
+    text-align: center;
+    max-width: 400px;
+    width: 100%;
+    margin-top: 20px;
+    border: 1px solid var(--border);
+    transform: scale(0.95);
+    opacity: 0;
+    transition: all 0.4s cubic-bezier(0.175, 0.885, 0.32, 1.275);
+  }
+  .result-card.show { transform: scale(1); opacity: 1; }
+  .result-label { font-size: 0.8rem; text-transform: uppercase; letter-spacing: 1px; color: #64748b; margin-bottom: 8px; }
+  .result-text { font-size: 1.25rem; font-weight: 600; color: var(--text); line-height: 1.4; }
+
+  .turn-indicator {
+    margin-bottom: 15px;
+    padding: 8px 16px;
+    background: #e0e7ff;
+    color: var(--accent);
+    border-radius: 20px;
+    font-size: 0.85rem;
+    font-weight: 600;
+    display: none;
+  }
+  .turn-indicator.visible { display: inline-block; }
+
+  /* Hidden controls for host */
+  #hostControls { display: none; }
+</style>
+</head>
+<body>
+
+<header>
+  <h1>Dare Sync</h1>
+  <div class="status" id="status">Disconnected</div>
+</header>
+
+<!-- Connection Panel -->
+<div class="panel" id="connectPanel">
+  <div style="text-align:center; margin-bottom:15px;">
+    <strong>Play with a friend</strong>
+  </div>
+  
+  <button class="btn-primary" style="width:100%" onclick="createRoom()">Create Room</button>
+  
+  <div style="margin: 15px 0; text-align:center; color:#94a3b8; font-size:0.8rem;">— OR —</div>
+  
+  <div class="input-group">
+    <input type="text" id="roomCodeInput" placeholder="Enter Room Code" />
+    <button class="btn-secondary" onclick="joinRoom()">Join</button>
+  </div>
+  
+  <div id="hostControls" style="margin-top:15px; text-align:center;">
+    <p style="font-size:0.9rem; margin-bottom:5px;">Share this code:</p>
+    <code id="myCodeDisplay" style="background:#f1f5f9; padding:5px 10px; border-radius:4px; font-size:1.1rem; letter-spacing:1px;"></code>
+  </div>
+</div>
+
+<!-- Game Area -->
+<div class="game-area" id="gameArea">
+  <div class="turn-indicator" id="turnIndicator">Your Turn</div>
+  
+  <div class="wheel-container">
+    <div class="pointer"></div>
+    <canvas id="wheel" width="400" height="400"></canvas>
+  </div>
+
+  <button class="btn-primary" id="spinBtn" style="padding: 15px 40px; font-size:1.1rem;" onclick="handleSpin()">SPIN WHEEL</button>
+
+  <div class="result-card" id="resultCard">
+    <div class="result-label">Your Dare</div>
+    <div class="result-text" id="dareText">...</div>
+  </div>
+</div>
+
+<script>
+// --- DATA ---
+const DARES = [
+  "Do 10 pushups",
+  "Speak in an accent for 2 mins",
+  "Let the other player post a story on your phone",
+  "Sing the chorus of your favorite song",
+  "Show the last photo in your camera roll",
+  "Do your best robot dance",
+  "Tell a joke. If they don't laugh, do 5 burpees",
+  "Hold an ice cube until it melts",
+  "Let them style your hair",
+  "Talk without closing your mouth for 1 min"
+];
+
+// --- STATE ---
+let peer = null;
+let conn = null;
+let myId = null;
+let isHost = false;
+let isMyTurn = true; // Host starts
+let currentAngle = 0;
+let spinning = false;
+
+// --- CANVAS SETUP ---
+const canvas = document.getElementById('wheel');
+const ctx = canvas.getContext('2d');
+const colors = ['#6366f1', '#818cf8', '#a5b4fc', '#c7d2fe', '#e0e7ff']; // Monochromatic Indigo scales
+
+function drawWheel() {
+  const size = canvas.width;
+  const center = size / 2;
+  const radius = center - 10;
+  ctx.clearRect(0, 0, size, size);
+  
+  const slice = (Math.PI * 2) / DARES.length;
+  
+  DARES.forEach((dare, i) => {
+    const start = currentAngle + i * slice;
+    const end = start + slice;
+    
+    ctx.beginPath();
+    ctx.moveTo(center, center);
+    ctx.arc(center, center, radius, start, end);
+    ctx.fillStyle = colors[i % colors.length];
+    ctx.fill();
+    ctx.strokeStyle = '#fff';
+    ctx.lineWidth = 2;
+    ctx.stroke();
+    
+    // Text
+    ctx.save();
+    ctx.translate(center, center);
+    ctx.rotate(start + slice / 2);
+    ctx.textAlign = "right";
+    ctx.fillStyle = "#fff";
+    ctx.font = "bold 14px sans-serif";
+    ctx.fillText(dare.length > 15 ? dare.substring(0,12)+"..." : dare, radius - 15, 5);
+    ctx.restore();
+  });
+  
+  // Center circle
+  ctx.beginPath();
+  ctx.arc(center, center, 30, 0, Math.PI*2);
+  ctx.fillStyle = "#fff";
+  ctx.fill();
+}
+
+drawWheel();
+
+// --- MULTIPLAYER LOGIC (PeerJS) ---
+
+function initPeer() {
+  // Create a random ID for this user
+  peer = new Peer(null, {
+    debug: 2
+  });
+
+  peer.on('open', (id) => {
+    myId = id;
+    console.log('My ID: ' + id);
+  });
+
+  peer.on('connection', (c) => {
+    // Host receives connection
+    conn = c;
+    isHost = true;
+    setupConnection();
+    updateUI("Connected!");
+    document.getElementById('hostControls').style.display = 'block';
+    document.getElementById('myCodeDisplay').innerText = myId;
+    activateGame();
+  });
+}
+
+function createRoom() {
+  initPeer();
+  document.getElementById('hostControls').style.display = 'block';
+  // Wait for ID to generate
+  setTimeout(() => {
+     document.getElementById('myCodeDisplay').innerText = myId || "Generating...";
+  }, 500);
+}
+
+function joinRoom() {
+  const code = document.getElementById('roomCodeInput').value.trim();
+  if (!code) return alert("Enter a code!");
+  
+  peer = new Peer(null, { debug: 2 });
+  
+  peer.on('open', () => {
+    conn = peer.connect(code);
+    isHost = false;
+    isMyTurn = false; // Guest waits for host
+    setupConnection();
+  });
+  
+  peer.on('error', (err) => alert("Connection failed. Check code."));
+}
+
+function setupConnection() {
+  conn.on('open', () => {
+    updateUI("Connected to Player!", true);
+    activateGame();
+    syncState();
+  });
+
+  conn.on('data', (data) => {
+    handleData(data);
+  });
+  
+  conn.on('close', () => {
+    updateUI("Player disconnected");
+    document.getElementById('gameArea').classList.remove('active');
+  });
+}
+
+function handleData(data) {
+  if (data.type === 'SPIN_START') {
+    startRemoteSpin(data.angle);
+  } else if (data.type === 'SPIN_END') {
+    finishRemoteSpin(data.dare);
+  } else if (data.type === 'SYNC') {
+    // Initial sync
+    isMyTurn = data.isMyTurn;
+    updateTurnIndicator();
+  }
+}
+
+function syncState() {
+  if (conn && conn.open) {
+    conn.send({ type: 'SYNC', isMyTurn: isMyTurn });
+  }
+}
+
+// --- GAME LOGIC ---
+
+function activateGame() {
+  document.getElementById('connectPanel').style.display = 'none';
+  document.getElementById('gameArea').classList.add('active');
+  updateTurnIndicator();
+}
+
+function updateTurnIndicator() {
+  const ind = document.getElementById('turnIndicator');
+  const btn = document.getElementById('spinBtn');
+  
+  if (isMyTurn) {
+    ind.innerText = "YOUR TURN";
+    ind.classList.add('visible');
+    btn.disabled = false;
+    btn.style.opacity = 1;
+  } else {
+    ind.innerText = "WAITING FOR OPPONENT...";
+    ind.classList.add('visible');
+    btn.disabled = true;
+    btn.style.opacity = 0.5;
+  }
+}
+
+function handleSpin() {
+  if (spinning || !isMyTurn) return;
+  
+  // 1. Disable button locally
+  spinning = true;
+  document.getElementById('spinBtn').disabled = true;
+  document.getElementById('resultCard').classList.remove('show');
+  
+  // 2. Calculate spin
+  const spinAmount = Math.PI * 2 * (5 + Math.random() * 5);
+  const duration = 4000;
+  const startTime = performance.now();
+  const startAngle = currentAngle;
+  
+  // 3. Tell other player to spin SAME amount
+  if (conn && conn.open) {
+    conn.send({ type: 'SPIN_START', angle: spinAmount });
+  }
+  
+  // 4. Animate
+  function animate(now) {
+    const elapsed = now - startTime;
+    const t = Math.min(elapsed / duration, 1);
+    const ease = 1 - Math.pow(1 - t, 3);
+    
+    currentAngle = startAngle + spinAmount * ease;
+    drawWheel();
+    
+    if (t < 1) {
+      requestAnimationFrame(animate);
+    } else {
+      finishSpin();
+    }
+  }
+  requestAnimationFrame(animate);
+}
+
+function startRemoteSpin(spinAmount) {
+  spinning = true;
+  document.getElementById('resultCard').classList.remove('show');
+  const duration = 4000;
+  const startTime = performance.now();
+  const startAngle = currentAngle;
+  
+  function animate(now) {
+    const elapsed = now - startTime;
+    const t = Math.min(elapsed / duration, 1);
+    const ease = 1 - Math.pow(1 - t, 3);
+    
+    currentAngle = startAngle + spinAmount * ease;
+    drawWheel();
+    
+    if (t < 1) requestAnimationFrame(animate);
+  }
+  requestAnimationFrame(animate);
+}
+
+function finishSpin() {
+  spinning = false;
+  
+  // Calculate result
+  const slice = (Math.PI * 2) / DARES.length;
+  const normalized = ((Math.PI * 2 - (currentAngle % (Math.PI * 2))) + Math.PI * 1.5) % (Math.PI * 2);
+  const index = Math.floor(normalized / slice) % DARES.length;
+  const result = DARES[index];
+  
+  // Show result
+  document.getElementById('dareText').innerText = result;
+  document.getElementById('resultCard').classList.add('show');
+  
+  // Send result to other player (so they see it too)
+  if (conn && conn.open) {
+    conn.send({ type: 'SPIN_END', dare: result });
+  }
+  
+  // Switch turns
+  isMyTurn = !isMyTurn;
+  syncState();
+  updateTurnIndicator();
+}
+
+function finishRemoteSpin(dare) {
+  spinning = false;
+  document.getElementById('dareText').innerText = dare;
+  document.getElementById('resultCard').classList.add('show');
+  
+  // Switch turns
+  isMyTurn = !isMyTurn;
+  updateTurnIndicator();
+}
+
+function updateUI(msg, connected = false) {
+  const el = document.getElementById('status');
+  el.innerText = msg;
+  if (connected) el.classList.add('connected');
+}
+</script>
+</body>
+</html>

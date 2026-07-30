@@ -176,7 +176,6 @@
   <div class="status" id="status">Ready to play</div>
 </header>
 
-<!-- Connection Panel -->
 <div class="panel" id="connectPanel">
   <div id="step1">
     <strong>Start a new game</strong>
@@ -208,7 +207,6 @@
   <button class="btn-secondary" style="width:100%;" onclick="showJoinStep()">Join Existing Game</button>
 </div>
 
-<!-- Game Area -->
 <div class="game-area" id="gameArea">
   <div class="turn-indicator" id="turnIndicator">Your Turn</div>
 
@@ -243,12 +241,12 @@ const DARES = [
 
 let peer = null;
 let conn = null;
-let myId = null;
 let isHost = false;
 let isMyTurn = true;
 let currentAngle = 0;
 let spinning = false;
 let connectionTimeout = null;
+let currentRoomCode = null;
 
 const canvas = document.getElementById('wheel');
 const ctx = canvas.getContext('2d');
@@ -298,8 +296,7 @@ drawWheel();
 // ============================================
 
 function generateRoomCode() {
-  // 8-character code, more unique
-  const chars = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789'; // removed confusing chars like 0/O, 1/I
+  const chars = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789';
   let code = '';
   for (let i = 0; i < 8; i++) {
     code += chars.charAt(Math.floor(Math.random() * chars.length));
@@ -335,13 +332,13 @@ function createRoom() {
 
   const btn = document.getElementById('createBtn');
   btn.disabled = true;
-  btn.innerText = "Connecting to server...";
-  updateStatus("Connecting to signaling server...", "loading");
+  btn.innerText = "Connecting...";
+  updateStatus("Connecting to server...", "loading");
 
-  const roomCode = generateRoomCode();
-  myId = "daregame-" + roomCode + "-" + Date.now().toString(36);
+  currentRoomCode = generateRoomCode();
+  // FIXED: Host ID is now JUST daregame-{CODE}, no timestamp
+  const myId = "daregame-" + currentRoomCode;
 
-  // Explicit PeerJS config for reliability
   peer = new Peer(myId, {
     debug: 1,
     config: {
@@ -353,10 +350,9 @@ function createRoom() {
     }
   });
 
-  // Timeout: if peer doesn't open in 15 seconds, fail
   connectionTimeout = setTimeout(() => {
     if (!peer || peer.destroyed) return;
-    updateStatus("Server connection timed out. Try again.", "error");
+    updateStatus("Server timed out. Try again.", "error");
     btn.disabled = false;
     btn.innerText = "Create Room";
     cleanupPeer();
@@ -369,11 +365,8 @@ function createRoom() {
 
     document.getElementById('step1').style.display = 'none';
     document.getElementById('step2').style.display = 'block';
-    document.getElementById('myCodeDisplay').innerText = roomCode;
+    document.getElementById('myCodeDisplay').innerText = currentRoomCode;
     updateStatus("Room ready! Share the code.", "connected");
-
-    // Store roomCode for later
-    peer._roomCode = roomCode;
   });
 
   peer.on('connection', (c) => {
@@ -388,11 +381,15 @@ function createRoom() {
     btn.innerText = "Create Room";
 
     let msg = "Connection error.";
-    if (err.type === 'unavailable-id') msg = "Code taken. Try again.";
+    if (err.type === 'unavailable-id') {
+      msg = "Code already taken. Try again.";
+      // Auto-retry with new code
+      setTimeout(() => createRoom(), 500);
+      return;
+    }
     else if (err.type === 'network') msg = "No internet connection.";
-    else if (err.type === 'server-error') msg = "PeerJS server busy. Try again in a moment.";
-    else if (err.type === 'socket-error') msg = "Socket error. Refresh and try again.";
-    else if (err.type === 'socket-closed') msg = "Connection closed. Try again.";
+    else if (err.type === 'server-error') msg = "Server busy. Try again.";
+    else if (err.type === 'socket-error') msg = "Socket error. Refresh page.";
 
     updateStatus(msg, "error");
     cleanupPeer();
@@ -403,19 +400,17 @@ function setupHostConnection() {
   updateStatus("Player connecting...", "loading");
   document.getElementById('waitingMsg').innerText = "Player connecting...";
 
-  // Timeout for connection opening
   connectionTimeout = setTimeout(() => {
     if (!conn || !conn.open) {
-      updateStatus("Connection timed out. Player may have left.", "error");
-      document.getElementById('waitingMsg').innerText = "Connection failed. Try again.";
+      updateStatus("Connection timed out.", "error");
+      document.getElementById('waitingMsg').innerText = "Connection failed.";
     }
   }, 15000);
 
   conn.on('open', () => {
     clearConnectionTimeout();
-    updateStatus("Connected! Game starting...", "connected");
+    updateStatus("Connected! Starting game...", "connected");
     startGame();
-    // Tell guest it's their turn first? No, host goes first.
     conn.send({ type: 'START', isMyTurn: false });
   });
 
@@ -430,7 +425,7 @@ function setupHostConnection() {
 
   conn.on('error', (err) => {
     console.error('Connection error:', err);
-    updateStatus("Connection error: " + err.message, "error");
+    updateStatus("Connection error", "error");
   });
 }
 
@@ -458,12 +453,7 @@ function joinRoom() {
   btn.innerText = "...";
   updateStatus("Connecting to server...", "loading");
 
-  // Find the host: we need to guess their full ID
-  // Host ID format: daregame-{CODE}-{timestamp}
-  // We'll use a list call to find matching peers
-  // Actually, simpler: use a fixed prefix that both sides know
-
-  // NEW APPROACH: Use a predictable host ID format
+  // FIXED: Same ID format as host
   const hostId = "daregame-" + code;
 
   peer = new Peer({
@@ -479,10 +469,10 @@ function joinRoom() {
 
   connectionTimeout = setTimeout(() => {
     if (!peer || peer.destroyed) return;
-    showJoinError("Server connection timed out. Check your internet.");
+    showJoinError("Server timed out. Check internet.");
     btn.disabled = false;
     btn.innerText = "Join";
-    updateStatus("Connection timed out", "error");
+    updateStatus("Timed out", "error");
     cleanupPeer();
   }, 15000);
 
@@ -490,7 +480,6 @@ function joinRoom() {
     clearConnectionTimeout();
     updateStatus("Finding room...", "loading");
 
-    // Connect to host
     conn = peer.connect(hostId, { reliable: true });
 
     // Timeout for connection
@@ -499,7 +488,7 @@ function joinRoom() {
         showJoinError("Room not found or host left. Check the code.");
         btn.disabled = false;
         btn.innerText = "Join";
-        updateStatus("Could not find room", "error");
+        updateStatus("Room not found", "error");
         cleanupPeer();
       }
     }, 15000);
@@ -522,7 +511,7 @@ function joinRoom() {
 
     conn.on('error', (err) => {
       console.error('Conn error:', err);
-      showJoinError("Connection error: " + err.message);
+      showJoinError("Connection error.");
       btn.disabled = false;
       btn.innerText = "Join";
     });
@@ -536,10 +525,9 @@ function joinRoom() {
 
     let msg = "Connection error.";
     if (err.type === 'peer-unavailable') msg = "Room not found. Check the code.";
-    else if (err.type === 'network') msg = "No internet connection.";
-    else if (err.type === 'server-error') msg = "PeerJS server busy. Try again.";
-    else if (err.type === 'socket-error') msg = "Socket error. Refresh page.";
-    else msg = err.type + ": " + (err.message || "Unknown error");
+    else if (err.type === 'network') msg = "No internet.";
+    else if (err.type === 'server-error') msg = "Server busy. Try again.";
+    else msg = err.type;
 
     showJoinError(msg);
     updateStatus(msg, "error");
@@ -575,7 +563,6 @@ function handleData(data) {
     isMyTurn = data.isMyTurn;
     updateTurnIndicator();
   } else if (data.type === 'SPIN') {
-    // Remote player spun - animate same wheel and show result
     remoteSpin(data.angle, data.dare);
   } else if (data.type === 'TURN') {
     isMyTurn = data.isMyTurn;
@@ -612,14 +599,12 @@ function handleSpin() {
   const startTime = performance.now();
   const startAngle = currentAngle;
 
-  // Calculate result now (deterministic based on spinAmount)
   const finalAngle = startAngle + spinAmount;
   const slice = (Math.PI * 2) / DARES.length;
   const normalized = ((Math.PI * 2 - (finalAngle % (Math.PI * 2))) + Math.PI * 1.5) % (Math.PI * 2);
   const index = Math.floor(normalized / slice) % DARES.length;
   const result = DARES[index];
 
-  // Send to opponent IMMEDIATELY so they animate too
   if (conn && conn.open) {
     conn.send({ type: 'SPIN', angle: spinAmount, dare: result });
   }
@@ -635,11 +620,9 @@ function handleSpin() {
     if (t < 1) {
       requestAnimationFrame(animate);
     } else {
-      // Show result
       document.getElementById('dareText').innerText = result;
       document.getElementById('resultCard').classList.add('show');
 
-      // Switch turns
       isMyTurn = false;
       if (conn && conn.open) {
         conn.send({ type: 'TURN', isMyTurn: true });
@@ -674,7 +657,6 @@ function remoteSpin(spinAmount, dare) {
       document.getElementById('dareText').innerText = dare;
       document.getElementById('resultCard').classList.add('show');
 
-      // It's now my turn
       isMyTurn = true;
       updateTurnIndicator();
       spinning = false;
@@ -710,7 +692,6 @@ function copyCode() {
     btn.innerText = "✅ Copied!";
     setTimeout(() => btn.innerText = original, 2000);
   }).catch(() => {
-    // Fallback
     const ta = document.createElement('textarea');
     ta.value = code;
     document.body.appendChild(ta);

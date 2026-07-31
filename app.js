@@ -51,6 +51,7 @@ let wheel1Angle = 0; // Truth/Dare wheel
 let wheel2Angle = 0; // Prompt wheel
 let isSpinning = false;
 let lastSpinTime = 0;
+let currentSpinData = null; // Store current spin for wheel drawing
 
 // ============================================
 // CANVAS SETUP
@@ -103,9 +104,14 @@ function drawWheel2() {
   const radius = center - 5;
   ctx2.clearRect(0, 0, size, size);
   
-  const items = isMyTurn || !isSpinning ? currentDares : currentTruths; // Fallback, actual pool determined at spin
-  // For drawing, we just show a generic representation or the current active pool
-  const pool = currentDares.length > 0 ? currentDares : ["Add Dares"];
+  // FIXED: Use currentSpinData to determine which pool to show
+  let pool = currentDares; // Default
+  if (currentSpinData) {
+    pool = currentSpinData.resultType === 'TRUTH' ? currentTruths : currentDares;
+  }
+  
+  if (pool.length === 0) pool = ["No prompts"];
+  
   const numSlices = pool.length;
   const sliceAngle = (Math.PI * 2) / numSlices;
   const colors = ["#6366f1", "#818cf8", "#a5b4fc", "#c7d2fe", "#e0e7ff", "#ddd6fe"];
@@ -169,7 +175,8 @@ function createRoom() {
     guestId: null,
     gameState: 'waiting',
     currentTurn: playerId,
-    settings: { truths: currentTruths, dares: currentDares }
+    settings: { truths: currentTruths, dares: currentDares },
+    spinState: null
   }).then(() => {
     document.getElementById('step1').style.display = 'none';
     document.getElementById('step2').style.display = 'block';
@@ -239,6 +246,7 @@ function startGame() {
   document.getElementById('connectPanel').style.display = 'none';
   document.getElementById('gameArea').classList.add('active');
   
+  // Listen for turn changes
   roomRef.on('value', (snapshot) => {
     const data = snapshot.val();
     if (!data) return;
@@ -265,11 +273,25 @@ function startGame() {
 
 function getSpinAmount(numSlices, targetIndex, currentAngle) {
   const sliceAngle = (Math.PI * 2) / numSlices;
-  const N = 5 + Math.floor(Math.random() * 4); // 5 to 8 rotations
-  const targetRotation = 1.5 * Math.PI + (N * 2 * Math.PI);
+  const N = 5 + Math.floor(Math.random() * 4); // 5 to 8 full rotations
+  
+  // Target angle where pointer (at top = 1.5π) should land
+  const targetAngle = 1.5 * Math.PI;
+  
+  // Center of target slice
   const sliceCenter = (targetIndex * sliceAngle) + (sliceAngle / 2);
-  let spinAmount = targetRotation - currentAngle - sliceCenter;
-  while (spinAmount < Math.PI * 2 * 5) spinAmount += Math.PI * 2;
+  
+  // Calculate how much to spin to land on target
+  let spinAmount = targetAngle - (currentAngle % (Math.PI * 2)) - sliceCenter;
+  
+  // Add full rotations
+  spinAmount += N * Math.PI * 2;
+  
+  // Ensure positive
+  while (spinAmount < Math.PI * 2 * 5) {
+    spinAmount += Math.PI * 2;
+  }
+  
   return spinAmount;
 }
 
@@ -286,34 +308,45 @@ function handleSpin() {
   const spin1 = getSpinAmount(2, isTruth ? 0 : 1, wheel1Angle);
   const spin2 = getSpinAmount(pool.length, pIndex, wheel2Angle);
   
-  // 3. Push to Firebase to sync with other player
+  // 3. Store spin data for drawing
+  currentSpinData = {
+    resultType: isTruth ? 'TRUTH' : 'DARE',
+    resultPrompt: resultPrompt
+  };
+  
+  // 4. Push to Firebase to sync with other player
   const spinData = {
     isSpinning: true,
     spinAmount1: spin1,
     spinAmount2: spin2,
-    resultType: isTruth ? 'TRUTH' : 'DARE',
+    resultType: currentSpinData.resultType,
     resultPrompt: resultPrompt,
-    startTime: firebase.database.ServerValue.TIMESTAMP
+    startTime: firebase.database.ServerValue.TIMESTAMP,
+    spinnerId: playerId
   };
   
-  roomRef.update({
-    spinState: spinData,
-    currentTurn: isHost ? (roomRef.child('guestId') ? 'guest' : 'host') : 'host' // Simplified turn flip
-  });
-  
-  // Get actual next player ID for robust turn flipping
+  // FIXED: Get next player ID and update turn in one operation
   roomRef.once('value').then(snap => {
     const d = snap.val();
     const nextId = (d.currentTurn === d.hostId) ? d.guestId : d.hostId;
-    roomRef.update({ currentTurn: nextId });
+    
+    roomRef.update({
+      spinState: spinData,
+      currentTurn: nextId
+    });
   });
 
-  // 4. Animate locally immediately
+  // 5. Animate locally immediately
   animateDualWheels(spinData);
 }
 
 function animateDualWheels(spinData) {
   isSpinning = true;
+  currentSpinData = {
+    resultType: spinData.resultType,
+    resultPrompt: spinData.resultPrompt
+  };
+  
   document.getElementById('spinBtn').disabled = true;
   document.getElementById('resultCard').classList.remove('show');
   
@@ -362,16 +395,17 @@ function updateStatus(msg, type) {
 function updateTurnIndicator() {
   const ind = document.getElementById('turnIndicator');
   const btn = document.getElementById('spinBtn');
-  if (isMyTurn && !isSpinning) {
-    ind.innerText = "👉 YOUR TURN";
-    ind.classList.add('visible');
-    btn.disabled = false;
-    btn.style.opacity = 1;
-  } else if (isSpinning) {
+  
+  if (isSpinning) {
     ind.innerText = "🌀 SPINNING...";
     ind.classList.add('visible');
     btn.disabled = true;
     btn.style.opacity = 0.5;
+  } else if (isMyTurn) {
+    ind.innerText = "👉 YOUR TURN";
+    ind.classList.add('visible');
+    btn.disabled = false;
+    btn.style.opacity = 1;
   } else {
     ind.innerText = "⏳ OPPONENT'S TURN";
     ind.classList.add('visible');
@@ -437,7 +471,6 @@ function saveSettings() {
       closeSettings();
     });
   } else {
-    // Offline fallback
     currentTruths = newTruths;
     currentDares = newDares;
     drawWheel2();

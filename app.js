@@ -10,8 +10,6 @@ const firebaseConfig = {
   messagingSenderId: "879130223792",
   appId: "1:879130223792:web:33d8bd45169527abed8775"
 };
-
-// Initialize Firebase
 firebase.initializeApp(firebaseConfig);
 const db = firebase.database();
 
@@ -43,7 +41,6 @@ let isMyTurn = true;
 let currentAngle = 0;
 let spinning = false;
 let roomRef = null;
-let gameStarted = false; // Prevents duplicate startGame() calls
 
 // ============================================
 // CANVAS SETUP
@@ -92,7 +89,7 @@ function drawWheel() {
 drawWheel();
 
 // ============================================
-// ROOM MANAGEMENT
+// HELPERS
 // ============================================
 
 function generateRoomCode() {
@@ -103,6 +100,31 @@ function generatePlayerId() {
   return 'player_' + Math.random().toString(36).substring(2, 10);
 }
 
+function updateStatus(msg, type) {
+  const el = document.getElementById('status');
+  el.innerText = msg;
+  el.className = 'status ' + (type || '');
+}
+
+function showResult(dare) {
+  document.getElementById('dareText').innerText = dare;
+  document.getElementById('resultCard').classList.add('show');
+}
+
+function copyCode() {
+  const code = document.getElementById('myCodeDisplay').innerText;
+  navigator.clipboard.writeText(code).then(() => {
+    const btn = document.querySelector('.btn-copy');
+    const original = btn.innerText;
+    btn.innerText = "✅ Copied!";
+    setTimeout(() => btn.innerText = original, 2000);
+  });
+}
+
+// ============================================
+// ROOM CREATION (HOST)
+// ============================================
+
 function createRoom() {
   const btn = document.getElementById('createBtn');
   btn.disabled = true;
@@ -111,50 +133,67 @@ function createRoom() {
   roomId = generateRoomCode();
   playerId = generatePlayerId();
   isHost = true;
-  isMyTurn = true;
-  gameStarted = false;
   
   roomRef = db.ref('rooms/' + roomId);
   
-  // Host creates room with gameState: 'waiting'
+  console.log('[HOST] Creating room:', roomId, 'with player:', playerId);
+  
+  // Create room
   roomRef.set({
     hostId: playerId,
     guestId: null,
-    currentTurn: playerId,
     gameState: 'waiting',
+    currentTurn: playerId,
     lastSpin: null
   }).then(() => {
+    console.log('[HOST] Room created successfully');
+    
     document.getElementById('step1').style.display = 'none';
     document.getElementById('step2').style.display = 'block';
     document.getElementById('myCodeDisplay').innerText = roomId;
     updateStatus("Room created! Share the code.", "connected");
     
-    // Host listens for guest joining
-    roomRef.on('value', (snapshot) => {
-      const data = snapshot.val();
-      if (!data) return;
-      
-      // FIXED: Only check if guestId exists AND gameState is still 'waiting'
-      // Guest does NOT change gameState, only host does
-      if (data.guestId && data.gameState === 'waiting' && !gameStarted) {
-        gameStarted = true;
-        updateStatus("Player joined! Starting game...", "connected");
-        
-        // Host updates gameState to 'playing'
-        roomRef.update({
-          gameState: 'playing'
-        }).then(() => {
-          startGame();
-        });
-      }
-    });
+    // Set up listener for guest joining
+    console.log('[HOST] Setting up listener for guest...');
+    roomRef.on('value', handleHostRoomUpdate);
+    
   }).catch((err) => {
-    console.error(err);
+    console.error('[HOST] Error creating room:', err);
     btn.disabled = false;
     btn.innerText = "Create Room";
     updateStatus("Error creating room.", "error");
   });
 }
+
+function handleHostRoomUpdate(snapshot) {
+  const data = snapshot.val();
+  if (!data) {
+    console.log('[HOST] Room data is null');
+    return;
+  }
+  
+  console.log('[HOST] Room update:', data);
+  
+  // Check if guest has joined
+  if (data.guestId && data.gameState === 'waiting') {
+    console.log('[HOST] Guest joined! Starting game...');
+    updateStatus("Player joined! Starting game...", "connected");
+    
+    // Update gameState to 'playing'
+    roomRef.update({
+      gameState: 'playing'
+    }).then(() => {
+      console.log('[HOST] Game state updated to playing');
+      startGame();
+    }).catch((err) => {
+      console.error('[HOST] Error updating game state:', err);
+    });
+  }
+}
+
+// ============================================
+// ROOM JOINING (GUEST)
+// ============================================
 
 function joinRoom() {
   const code = document.getElementById('roomCodeInput').value.trim().toUpperCase();
@@ -163,68 +202,98 @@ function joinRoom() {
   roomId = code;
   playerId = generatePlayerId();
   isHost = false;
-  isMyTurn = false;
-  gameStarted = false;
   
   roomRef = db.ref('rooms/' + roomId);
   
-  updateStatus("Joining room...", "");
+  console.log('[GUEST] Joining room:', roomId, 'with player:', playerId);
+  updateStatus("Joining room...", "loading");
   
   // Check if room exists
   roomRef.once('value').then((snapshot) => {
     const data = snapshot.val();
     
     if (!data) {
+      console.log('[GUEST] Room not found');
       updateStatus("Room not found. Check code.", "error");
       return;
     }
     
     if (data.gameState !== 'waiting') {
+      console.log('[GUEST] Game already in progress');
       updateStatus("Game already in progress.", "error");
       return;
     }
     
-    // FIXED: Guest ONLY sets guestId, does NOT change gameState
-    // Host will detect this and update gameState to 'playing'
+    console.log('[GUEST] Room found, joining...');
+    
+    // Join by setting guestId
     roomRef.update({
       guestId: playerId
     }).then(() => {
+      console.log('[GUEST] Successfully joined, waiting for host...');
       updateStatus("Waiting for host to start...", "loading");
       
-      // Guest listens for gameState change (host will set it to 'playing')
-      roomRef.on('value', (snapshot) => {
-        const data = snapshot.val();
-        if (!data) return;
-        
-        // When host sets gameState to 'playing', guest starts the game
-        if (data.gameState === 'playing' && !gameStarted) {
-          gameStarted = true;
-          updateStatus("Connected!", "connected");
-          startGame();
-        }
-      });
+      // Listen for game to start
+      roomRef.on('value', handleGuestRoomUpdate);
+      
+    }).catch((err) => {
+      console.error('[GUEST] Error joining room:', err);
+      updateStatus("Error joining room.", "error");
     });
+    
   }).catch((err) => {
-    console.error(err);
-    updateStatus("Error joining room.", "error");
+    console.error('[GUEST] Error checking room:', err);
+    updateStatus("Error checking room.", "error");
   });
 }
 
+function handleGuestRoomUpdate(snapshot) {
+  const data = snapshot.val();
+  if (!data) {
+    console.log('[GUEST] Room data is null');
+    return;
+  }
+  
+  console.log('[GUEST] Room update:', data);
+  
+  // Check if game has started
+  if (data.gameState === 'playing') {
+    console.log('[GUEST] Game started!');
+    updateStatus("Connected!", "connected");
+    startGame();
+  }
+}
+
+// ============================================
+// GAME START
+// ============================================
+
 function startGame() {
+  console.log('[' + (isHost ? 'HOST' : 'GUEST') + '] Starting game');
+  
   document.getElementById('connectPanel').style.display = 'none';
   document.getElementById('gameArea').classList.add('active');
   
-  // Listen for game state changes (turns, spins)
+  // Set up turn listener
   roomRef.on('value', handleGameStateChange);
   
-  updateTurnIndicator();
+  // Determine initial turn
+  roomRef.once('value').then((snapshot) => {
+    const data = snapshot.val();
+    if (data.currentTurn === playerId) {
+      isMyTurn = true;
+    } else {
+      isMyTurn = false;
+    }
+    updateTurnIndicator();
+  });
 }
 
 function handleGameStateChange(snapshot) {
   const data = snapshot.val();
   if (!data) return;
   
-  // Update whose turn it is
+  // Update turn
   if (data.currentTurn === playerId) {
     isMyTurn = true;
   } else {
@@ -235,11 +304,9 @@ function handleGameStateChange(snapshot) {
   
   // Handle spin result
   if (data.lastSpin && data.lastSpin.dare) {
-    // Show the dare if it's new (not yet processed by this player)
     if (!data.lastSpin.processedBy || !data.lastSpin.processedBy.includes(playerId)) {
       showResult(data.lastSpin.dare);
       
-      // Mark as processed by this player
       const processedBy = data.lastSpin.processedBy || [];
       processedBy.push(playerId);
       roomRef.child('lastSpin/processedBy').set(processedBy);
@@ -307,9 +374,7 @@ function finishSpin() {
   
   showResult(result);
   
-  // FIXED: Determine next player correctly
-  // If I'm the host, next turn is guest (but we don't know guest's ID here)
-  // Solution: Store both player IDs in the room, then alternate
+  // Get room data to determine next player
   roomRef.once('value').then((snapshot) => {
     const data = snapshot.val();
     const nextPlayerId = (data.currentTurn === data.hostId) ? data.guestId : data.hostId;
@@ -319,32 +384,11 @@ function finishSpin() {
       lastSpin: {
         dare: result,
         timestamp: firebase.database.ServerValue.TIMESTAMP,
-        processedBy: [playerId] // Mark as processed by the spinner
+        processedBy: [playerId]
       }
     });
   });
   
   isMyTurn = false;
   updateTurnIndicator();
-}
-
-function showResult(dare) {
-  document.getElementById('dareText').innerText = dare;
-  document.getElementById('resultCard').classList.add('show');
-}
-
-function updateStatus(msg, type) {
-  const el = document.getElementById('status');
-  el.innerText = msg;
-  el.className = 'status ' + (type || '');
-}
-
-function copyCode() {
-  const code = document.getElementById('myCodeDisplay').innerText;
-  navigator.clipboard.writeText(code).then(() => {
-    const btn = document.querySelector('.btn-copy');
-    const original = btn.innerText;
-    btn.innerText = "✅ Copied!";
-    setTimeout(() => btn.innerText = original, 2000);
-  });
-    }
+      }

@@ -10,9 +10,11 @@
 
 <header>
   <h1>Dare Sync</h1>
+  <button class="icon-btn" onclick="openSettings()" title="Settings">⚙️</button>
   <div class="status" id="status">Ready to play</div>
 </header>
 
+<!-- Connection Panel -->
 <div class="panel" id="connectPanel">
   <div id="step1">
     <strong>Start a new game</strong>
@@ -34,19 +36,55 @@
   </div>
 </div>
 
+<!-- Game Area -->
 <div class="game-area" id="gameArea">
   <div class="turn-indicator" id="turnIndicator">Your Turn</div>
 
-  <div class="wheel-container">
-    <div class="pointer"></div>
-    <canvas id="wheel" width="400" height="400"></canvas>
+  <div class="wheels-container">
+    <div class="wheel-box">
+      <div class="wheel-label">TYPE</div>
+      <div class="wheel-wrap">
+        <div class="pointer"></div>
+        <canvas id="wheel1" width="240" height="240"></canvas>
+      </div>
+    </div>
+    <div class="wheel-box">
+      <div class="wheel-label">PROMPT</div>
+      <div class="wheel-wrap">
+        <div class="pointer"></div>
+        <canvas id="wheel2" width="240" height="240"></canvas>
+      </div>
+    </div>
   </div>
 
-  <button class="btn-primary" id="spinBtn" style="padding: 15px 40px; font-size:1.1rem; max-width: 300px;" onclick="handleSpin()">SPIN WHEEL</button>
+  <button class="btn-primary" id="spinBtn" onclick="handleSpin()">SPIN WHEELS</button>
 
   <div class="result-card" id="resultCard">
-    <div class="result-label" id="resultLabel">Your Dare</div>
+    <div class="result-label" id="resultType">TYPE</div>
     <div class="result-text" id="dareText">...</div>
+  </div>
+</div>
+
+<!-- Settings Modal -->
+<div class="modal-overlay" id="settingsModal">
+  <div class="modal">
+    <div class="modal-header">
+      <h2>Customize Prompts</h2>
+      <button class="close-btn" onclick="closeSettings()">✕</button>
+    </div>
+    <div class="modal-tabs">
+      <button class="tab-btn active" onclick="switchTab('truths')">Truths</button>
+      <button class="tab-btn" onclick="switchTab('dares')">Dares</button>
+    </div>
+    <div class="modal-body">
+      <textarea id="truthsInput" placeholder="One truth per line..."></textarea>
+      <textarea id="daresInput" placeholder="One dare per line..." style="display:none;"></textarea>
+      <p class="hint">Changes sync to both players instantly.</p>
+    </div>
+    <div class="modal-footer">
+      <button class="btn-secondary" onclick="closeSettings()">Cancel</button>
+      <button class="btn-primary" onclick="saveSettings()">Save & Sync</button>
+    </div>
   </div>
 </div>
 
